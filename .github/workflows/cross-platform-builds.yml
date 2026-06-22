@@ -64,7 +64,7 @@ jobs:
         run: |
           BINARY="build/Ratosaurus_artefacts/Release/VST3/Ratosaurus.vst3/Contents/MacOS/Ratosaurus"
           lipo -info "$BINARY"
-          lipo -verify_arch arm64 x86_64 "$BINARY"
+          lipo "$BINARY" -verify_arch arm64 x86_64
 
       - name: Ad-hoc sign bundle
         run: codesign --force --deep --sign - "build/Ratosaurus_artefacts/Release/VST3/Ratosaurus.vst3"
