@@ -1,0 +1,101 @@
+name: Cross-platform VST3 builds
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    name: Linux x86_64
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install JUCE Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build build-essential \
+            libasound2-dev libfreetype6-dev libfontconfig1-dev \
+            libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \
+            libxinerama-dev libxrandr-dev libxrender-dev \
+            libgl1-mesa-dev libglu1-mesa-dev
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build VST3
+        run: cmake --build build --target Ratosaurus_VST3 --parallel 2
+
+      - name: Package
+        run: |
+          mkdir -p package
+          cp -R build/Ratosaurus_artefacts/Release/VST3/Ratosaurus.vst3 package/
+          cp Assets/fonts/OFL.txt package/FONT-LICENSES.txt
+          tar -czf Ratosaurus-Linux-x86_64-VST3.tar.gz -C package .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ratosaurus-Linux-x86_64-VST3
+          path: Ratosaurus-Linux-x86_64-VST3.tar.gz
+          if-no-files-found: error
+
+  macos:
+    name: macOS Universal
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure universal build
+        run: >-
+          cmake -S . -B build -G Xcode
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+
+      - name: Build VST3
+        run: cmake --build build --config Release --target Ratosaurus_VST3 --parallel 2
+
+      - name: Verify universal binary
+        run: |
+          BINARY="build/Ratosaurus_artefacts/Release/VST3/Ratosaurus.vst3/Contents/MacOS/Ratosaurus"
+          lipo -info "$BINARY"
+          lipo -verify_arch arm64 x86_64 "$BINARY"
+
+      - name: Ad-hoc sign bundle
+        run: codesign --force --deep --sign - "build/Ratosaurus_artefacts/Release/VST3/Ratosaurus.vst3"
+
+      - name: Package
+        run: |
+          mkdir package
+          ditto "build/Ratosaurus_artefacts/Release/VST3/Ratosaurus.vst3" "package/Ratosaurus.vst3"
+          cp Assets/fonts/OFL.txt package/FONT-LICENSES.txt
+          ditto -c -k --sequesterRsrc --keepParent package "Ratosaurus-macOS-Universal-VST3.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ratosaurus-macOS-Universal-VST3
+          path: Ratosaurus-macOS-Universal-VST3.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish release assets
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Ratosaurus-*-VST3
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            Ratosaurus-Linux-x86_64-VST3.tar.gz
+            Ratosaurus-macOS-Universal-VST3.zip

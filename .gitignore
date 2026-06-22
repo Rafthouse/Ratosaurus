@@ -1,0 +1,37 @@
+build/
+cmake-build-*/
+out/
+build.log
+
+*.vst3
+*.dll
+*.lib
+*.obj
+*.pdb
+*.ilk
+*.exp
+
+.vs/
+.idea/
+*.suo
+*.user
+*.sln
+*.vcxproj*
+CMakeSettings.json
+.cache/
+
+_deps/
+
+# Local design handoff/reference material (not part of the distributable source)
+_design_handoff/
+_design_handoff_v4/
+_layouts/
+_mockups/
+_v5/
+tools/
+
+# Legacy raster export; production faceplate is SVG-only
+Assets/faceplate.png
+
+*.DS_Store
+Thumbs.db
