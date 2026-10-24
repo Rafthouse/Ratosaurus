@@ -1,4 +1,4 @@
-name: Cross-platform VST3 builds
+name: Cross-platform VST3 builds + Installers
 
 on:
   workflow_dispatch:
@@ -10,6 +10,92 @@ permissions:
   contents: write
 
 jobs:
+  windows:
+    name: Windows x64 (VST3 + Standalone + Installer)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build VST3 & Standalone
+        run: cmake --build build --config Release --parallel
+
+      - name: Package Windows Installer (Inno Setup)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist-windows | Out-Null
+          $is = Join-Path $env:TEMP 'innosetup.exe'
+          Invoke-WebRequest -Uri 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe' -OutFile $is
+          Start-Process -FilePath $is -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-' -Wait
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe not found after install" }
+          & $iscc installer\ratosaurus.iss
+          Get-ChildItem dist-windows
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ratosaurus-Windows-x64-VST3
+          path: |
+            build/Ratosaurus_artefacts/Release/VST3/**
+            build/Ratosaurus_artefacts/Release/Standalone/**
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ratosaurus-Windows-Setup
+          path: dist-windows/*
+          if-no-files-found: error
+
+  macos:
+    name: macOS Universal (VST3 + Standalone + Installer)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure universal build
+        run: |
+          cmake -S . -B build -G Xcode \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+
+      - name: Build VST3 & Standalone
+        run: cmake --build build --config Release --parallel
+
+      - name: Ad-hoc sign bundle
+        run: codesign --force --deep --sign - "build/Ratosaurus_artefacts/Release/VST3/Ratosaurus.vst3"
+
+      - name: Package macOS Installer (.pkg)
+        run: |
+          mkdir -p dist-macos
+          mkdir -p pkgroot/Library/Audio/Plug-Ins/VST3
+          cp -R "build/Ratosaurus_artefacts/Release/VST3/Ratosaurus.vst3" pkgroot/Library/Audio/Plug-Ins/VST3/
+          pkgbuild --root pkgroot --identifier com.ratosaurusaudio.ratosaurus --version 1.0.0 --install-location / dist-macos/Ratosaurus-macOS-Universal2.pkg
+
+      - name: Build macOS Disk Image (.dmg)
+        run: |
+          brew install create-dmg
+          mkdir -p dmg-staging
+          cp -R "build/Ratosaurus_artefacts/Release/VST3/Ratosaurus.vst3" dmg-staging/
+          cp -R "build/Ratosaurus_artefacts/Release/Standalone/Ratosaurus.app" dmg-staging/
+          create-dmg --volname "Ratosaurus" --window-size 520 340 --icon-size 110 --app-drop-link 400 120 dist-macos/Ratosaurus-macOS-Universal2.dmg dmg-staging || true
+          ls -la dist-macos
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ratosaurus-macOS-Universal-VST3
+          path: |
+            build/Ratosaurus_artefacts/Release/VST3/**
+            build/Ratosaurus_artefacts/Release/Standalone/**
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ratosaurus-macOS-Installer
+          path: dist-macos/*
+          if-no-files-found: error
+
   linux:
     name: Linux x86_64
     runs-on: ubuntu-24.04
@@ -45,52 +131,15 @@ jobs:
           path: Ratosaurus-Linux-x86_64-VST3.tar.gz
           if-no-files-found: error
 
-  macos:
-    name: macOS Universal
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure universal build
-        run: >-
-          cmake -S . -B build -G Xcode
-          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
-          -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
-
-      - name: Build VST3
-        run: cmake --build build --config Release --target Ratosaurus_VST3 --parallel 2
-
-      - name: Verify universal binary
-        run: |
-          BINARY="build/Ratosaurus_artefacts/Release/VST3/Ratosaurus.vst3/Contents/MacOS/Ratosaurus"
-          lipo -info "$BINARY"
-          lipo "$BINARY" -verify_arch arm64 x86_64
-
-      - name: Ad-hoc sign bundle
-        run: codesign --force --deep --sign - "build/Ratosaurus_artefacts/Release/VST3/Ratosaurus.vst3"
-
-      - name: Package
-        run: |
-          mkdir package
-          ditto "build/Ratosaurus_artefacts/Release/VST3/Ratosaurus.vst3" "package/Ratosaurus.vst3"
-          cp Assets/fonts/OFL.txt package/FONT-LICENSES.txt
-          ditto -c -k --sequesterRsrc --keepParent package "Ratosaurus-macOS-Universal-VST3.zip"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Ratosaurus-macOS-Universal-VST3
-          path: Ratosaurus-macOS-Universal-VST3.zip
-          if-no-files-found: error
-
   release:
     name: Publish release assets
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, macos]
+    needs: [windows, macos, linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: Ratosaurus-*-VST3
+          pattern: Ratosaurus-*
           merge-multiple: true
 
       - uses: softprops/action-gh-release@v2
@@ -98,4 +147,6 @@ jobs:
           generate_release_notes: true
           files: |
             Ratosaurus-Linux-x86_64-VST3.tar.gz
-            Ratosaurus-macOS-Universal-VST3.zip
+            Ratosaurus-Windows-Setup-x64.exe
+            Ratosaurus-macOS-Universal2.pkg
+            Ratosaurus-macOS-Universal2.dmg
